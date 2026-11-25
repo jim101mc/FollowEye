@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "followeye"
+version = "0.1.0"
+description = "A Windows desktop assistant that follows your gaze and offers help before you ask."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "PySide6>=6.7",
+    "numpy>=1.26",
+    "pydantic>=2.6",
+    "cryptography>=42",
+    "keyring>=25",
+    "anthropic>=2.14",
+    "openai>=1.50",
+    "opencv-python>=4.9",
+    "mediapipe>=0.10.14,<0.11",
+    "mss>=9",
+    "pynput>=1.7",
+    "uiautomation>=2.0.18; sys_platform == 'win32'",
+    "pywin32>=306; sys_platform == 'win32'",
+    "winrt-runtime>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections>=2.0; sys_platform == 'win32'",
+    "winrt-Windows.Globalization>=2.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+onnx = ["onnxruntime-genai>=0.5"]
+foundry = ["foundry-local-sdk>=0.3"]
+dev = ["pytest>=8", "pyinstaller>=6.6"]
+
+[project.scripts]
+followeye = "followeye.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["followeye*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
