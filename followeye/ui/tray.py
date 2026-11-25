@@ -13,6 +13,8 @@ class Tray(QObject):
     pause_toggled = Signal()
     settings_requested = Signal(str)  # tab name
     calibrate_requested = Signal()
+    gaze_dot_toggled = Signal()
+    preview_requested = Signal()
     quit_requested = Signal()
 
     def __init__(self):
@@ -23,7 +25,7 @@ class Tray(QObject):
         self.icon.activated.connect(self._activated)
         self.icon.show()
 
-    def update(self, settings: Settings, paused: bool, status: str) -> None:
+    def update(self, settings: Settings, paused: bool, status: str, gaze_dot: bool = False) -> None:
         mode = settings.active_mode()
         state = "paused" if paused else ("off" if not mode.observe else "active")
         self.icon.setIcon(eye_icon(state))
@@ -50,7 +52,14 @@ class Tray(QObject):
         pause.setCheckable(True)
         pause.setChecked(paused)
         pause.triggered.connect(lambda _checked=False: self.pause_toggled.emit())
+        self.menu.addSection("Eye tracking")
         self.menu.addAction("Calibrate eye tracking…").triggered.connect(lambda: self.calibrate_requested.emit())
+        dot = self.menu.addAction("Show gaze dot")
+        dot.setCheckable(True)
+        dot.setChecked(gaze_dot)
+        dot.triggered.connect(lambda _checked=False: self.gaze_dot_toggled.emit())
+        self.menu.addAction("Camera preview…").triggered.connect(lambda: self.preview_requested.emit())
+        self.menu.addSeparator()
         self.menu.addAction("Settings…").triggered.connect(lambda: self.settings_requested.emit("modes"))
         self.menu.addAction("History…").triggered.connect(lambda: self.settings_requested.emit("history"))
         self.menu.addSeparator()

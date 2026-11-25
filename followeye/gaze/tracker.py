@@ -24,6 +24,7 @@ class GazeSample:
 
 FeatureCallback = Callable[[float, np.ndarray | None], None]
 GazeCallback = Callable[[GazeSample], None]
+FrameCallback = Callable[[np.ndarray, np.ndarray | None], None]
 
 
 class GazeTracker:
@@ -36,6 +37,7 @@ class GazeTracker:
         self._model: GazeModel | None = None
         self._filter: OneEuroFilter | None = None
         self._feature_listener: FeatureCallback | None = None
+        self._frame_listener: FrameCallback | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -52,6 +54,11 @@ class GazeTracker:
     def set_feature_listener(self, listener: FeatureCallback | None) -> None:
         with self._lock:
             self._feature_listener = listener
+
+    def set_frame_listener(self, listener: FrameCallback | None) -> None:
+        """Receives every camera frame (BGR) with its face landmarks, or None if no face was found."""
+        with self._lock:
+            self._frame_listener = listener
 
     def start(self) -> None:
         if self.running:
@@ -91,11 +98,15 @@ class GazeTracker:
                         return
                     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     result = mesh.process(rgb)
-                    features = None
+                    points = None
                     if result.multi_face_landmarks:
                         lm = result.multi_face_landmarks[0].landmark
-                        features = extract_features(np.array([(p.x, p.y) for p in lm]))
-                    self._publish(started, features)
+                        points = np.array([(p.x, p.y) for p in lm])
+                    with self._lock:
+                        frame_listener = self._frame_listener
+                    if frame_listener is not None:
+                        frame_listener(frame, points)
+                    self._publish(started, extract_features(points) if points is not None else None)
                     time.sleep(max(0.0, frame_time - (time.monotonic() - started)))
         finally:
             cap.release()

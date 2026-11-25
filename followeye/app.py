@@ -29,6 +29,8 @@ from .skills.decision import DecisionLayer, EscalationLearner, HourlyBudget
 from .skills.skills import Suggestion
 from .storage.vault import EncryptedJsonFile, HistoryLog, Vault, get_secret, set_secret
 from .ui.calibration import CalibrationWindow
+from .ui.camera_preview import CameraPreview, annotate
+from .ui.gaze_dot import GazeDot
 from .ui.glass_widget import GlassNotification
 from .ui.settings_dialog import SettingsDialog
 from .ui.tray import Tray
@@ -53,6 +55,7 @@ class _Bridge(QObject):
     copy_text = Signal(str)
     hotkey = Signal(str)
     gaze_error = Signal(str)
+    gaze_point = Signal(object)  # GazeSample
 
 
 class _UiaThread:
@@ -94,6 +97,9 @@ class FollowEyeApp(QObject):
         self._pipeline: Pipeline | None = None
         self._calibration: CalibrationWindow | None = None
         self._settings_dialog: SettingsDialog | None = None
+        self._preview: CameraPreview | None = None
+        self._show_dot = False
+        self.gaze_dot = GazeDot()
 
         self.bridge = _Bridge()
         self.bridge.suggestion.connect(self._on_suggestion)
@@ -103,6 +109,7 @@ class FollowEyeApp(QObject):
         self.bridge.copy_text.connect(lambda text: self.qapp.clipboard().setText(text))
         self.bridge.hotkey.connect(self._on_hotkey)
         self.bridge.gaze_error.connect(self._on_gaze_error)
+        self.bridge.gaze_point.connect(self._on_gaze_point)
 
         self.widget = GlassNotification(self.settings.notifications)
         self.widget.action_requested.connect(self._run_action)
@@ -114,6 +121,8 @@ class FollowEyeApp(QObject):
         self.tray.pause_toggled.connect(self.toggle_pause)
         self.tray.settings_requested.connect(self.open_settings)
         self.tray.calibrate_requested.connect(self.calibrate)
+        self.tray.gaze_dot_toggled.connect(self.toggle_gaze_dot)
+        self.tray.preview_requested.connect(self.open_preview)
         self.tray.quit_requested.connect(self.quit)
 
         self.analysis = _UiaThread("analysis")
@@ -145,6 +154,8 @@ class FollowEyeApp(QObject):
 
     def quit(self) -> None:
         self._stop.set()
+        if self._preview is not None:
+            self._preview.close()
         self.tracker.stop()
         self.activity.stop()
         self.hotkeys.stop()
@@ -253,7 +264,7 @@ class FollowEyeApp(QObject):
             self.widget.dismiss()
 
     def _refresh_tray(self) -> None:
-        self.tray.update(self.settings, self.paused, self.status)
+        self.tray.update(self.settings, self.paused, self.status, gaze_dot=self._show_dot)
 
     def _set_status(self, text: str) -> None:
         self.status = text
@@ -271,6 +282,8 @@ class FollowEyeApp(QObject):
         return resolve_behaviour(self._mode, self._blocklist, window)
 
     def _on_gaze(self, sample: GazeSample) -> None:
+        if self._show_dot:
+            self.bridge.gaze_point.emit(sample)
         if self._observing():
             self._inputs.put(("gaze", sample))
 
@@ -293,22 +306,69 @@ class FollowEyeApp(QObject):
             self._inputs.put(("clip", time.monotonic(), text[:2000]))
 
     def _update_tracker(self) -> None:
-        g = self.settings.gaze
-        run = g.enabled and g.calibration is not None and self._observing()
         if self._calibration is not None:
             return  # calibration owns the camera
-        if run:
+        g = self.settings.gaze
+        calibrated = g.enabled and g.calibration is not None
+        # The camera also runs while paused if the user is checking it with the dot or the preview.
+        want_gaze = calibrated and (self._observing() or self._show_dot)
+        want_camera = want_gaze or self._preview is not None
+        if want_camera:
+            if self.tracker.running and self.tracker.camera_index != g.camera_index:
+                self.tracker.stop()
             self.tracker.camera_index = g.camera_index
-            self.tracker.set_model(GazeModel.from_calibration(g.calibration), filter_for_smoothing(g.smoothing))
+            if calibrated:
+                self.tracker.set_model(GazeModel.from_calibration(g.calibration), filter_for_smoothing(g.smoothing))
+            else:
+                self.tracker.set_model(None, None)
             self.tracker.start()
         else:
             self.tracker.stop()
-        self._use_foreground = not run
+        self._use_foreground = not (want_camera and calibrated)
 
     def _on_gaze_error(self, message: str) -> None:
         self._use_foreground = True
         self._set_status("Eye tracking off: " + message)
+        if self._preview is not None:
+            self._preview.show_error(message)
         self.tray.message("Eye tracking unavailable", message + " Following the active window instead.")
+
+    def _on_gaze_point(self, sample: GazeSample) -> None:
+        if self._show_dot:
+            self.gaze_dot.update_gaze(sample.x, sample.y)
+
+    def toggle_gaze_dot(self) -> None:
+        g = self.settings.gaze
+        if not self._show_dot and (not g.enabled or g.calibration is None):
+            reason = "Calibrate eye tracking first." if g.enabled else "Turn on eye tracking in Settings first."
+            self.tray.message("Gaze dot", reason)
+            self._refresh_tray()  # undo the menu's checkmark
+            return
+        self._show_dot = not self._show_dot
+        if not self._show_dot:
+            self.gaze_dot.hide()
+        self._update_tracker()
+        self._refresh_tray()
+
+    def open_preview(self) -> None:
+        if self._calibration is not None:
+            return
+        if self._preview is not None:
+            self._preview.raise_()
+            self._preview.activateWindow()
+            return
+        preview = CameraPreview()
+        self._preview = preview
+        preview.closed.connect(self._preview_closed)
+        self.tracker.set_frame_listener(lambda frame, points: preview.frame.emit(*annotate(frame, points)))
+        self._update_tracker()
+        preview.show()
+        preview.activateWindow()
+
+    def _preview_closed(self) -> None:
+        self.tracker.set_frame_listener(None)
+        self._preview = None
+        self._update_tracker()
 
     # --- engine thread ---------------------------------------------------------------
 
@@ -470,6 +530,9 @@ class FollowEyeApp(QObject):
     def calibrate(self) -> None:
         if self._calibration is not None:
             return
+        if self._preview is not None:
+            self._preview.close()
+        self.gaze_dot.hide()
         self.tracker.stop()
         window = CalibrationWindow()
         self._calibration = window

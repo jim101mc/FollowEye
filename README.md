@@ -15,6 +15,15 @@ FollowEye is a Windows desktop assistant that follows where you look and offers 
 
 Without a calibration, or when the webcam is unavailable, FollowEye follows the active window instead of the gaze.
 
+### Checking the eye tracking
+
+Two tools in the tray menu help verify that tracking works:
+
+- **Camera preview** shows the mirrored webcam image with the tracked eye corners, lids and irises marked, and states whether a face and open eyes are detected. Use it to check lighting and seating position, also before calibrating.
+- **Show gaze dot** displays a small dot where FollowEye estimates the gaze to be. It turns grey while the eyes are not tracked (blinking, looking away). The dot ignores clicks and is excluded from FollowEye's own screenshots. It requires a calibration.
+
+Both keep the webcam running while they are open, even when observation is paused.
+
 ### When FollowEye looks at the screen
 
 The webcam is sampled continuously, but the screen is only captured and analysed when one of these triggers fires in a watched window:

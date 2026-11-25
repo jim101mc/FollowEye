@@ -42,6 +42,20 @@ def test_windows_ocr_reads_text():
     assert "4711" in ocr.recognize(image)
 
 
+def test_gaze_dot_does_not_hide_the_window_under_it(qapp):
+    from followeye.ui.gaze_dot import GazeDot
+    from followeye.winapi import windows
+
+    dot = GazeDot()
+    dpr = qapp.primaryScreen().devicePixelRatio()
+    dot.update_gaze(200 * dpr, 200 * dpr)
+    qapp.processEvents()
+    try:
+        assert windows.window_from_point(200 * dpr, 200 * dpr) != int(dot.winId())
+    finally:
+        dot.hide()
+
+
 def test_foreground_and_rect_lookups_do_not_crash():
     from followeye.winapi import windows
 
