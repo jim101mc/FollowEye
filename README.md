@@ -24,6 +24,10 @@ Two tools in the tray menu help verify that tracking works:
 
 Both keep the webcam running while they are open, even when observation is paused.
 
+**Camera number:** `0` is the first camera Windows reports, which is the built-in webcam on most laptops. If the preview reports that the camera cannot be opened, close other applications that use the camera, allow desktop apps to use it under *Windows Settings → Privacy & security → Camera*, or try `1` for an external webcam.
+
+The face model (`followeye/assets/face_landmarker.task`) is MediaPipe's Face Landmarker, distributed under the Apache License 2.0.
+
 ### When FollowEye looks at the screen
 
 The webcam is sampled continuously, but the screen is only captured and analysed when one of these triggers fires in a watched window:

@@ -74,41 +74,54 @@ class GazeTracker:
             self._thread = None
 
     def _run(self) -> None:
-        import cv2
-        import mediapipe as mp
+        try:
+            self._loop()
+        except Exception as e:  # report instead of dying silently: the UI would wait forever
+            log.exception("Gaze tracker failed")
+            self._on_error(f"Eye tracking stopped: {type(e).__name__}: {e}")
 
-        cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
-        if not cap.isOpened():
-            self._on_error(f"Could not open camera {self.camera_index}.")
+    def _open_camera(self):
+        import cv2
+
+        for backend in (cv2.CAP_DSHOW, cv2.CAP_MSMF):
+            cap = cv2.VideoCapture(self.camera_index, backend)
+            if cap.isOpened() and cap.read()[0]:
+                return cap
+            cap.release()
+        return None
+
+    def _loop(self) -> None:
+        import cv2
+
+        from .landmarks import FaceLandmarks
+
+        cap = self._open_camera()
+        if cap is None:
+            self._on_error(
+                f"Could not open camera {self.camera_index}. Close other apps using the camera, "
+                "allow desktop apps to use it (Windows Settings → Privacy & security → Camera), "
+                "or try another camera number in Settings → Eye tracking."
+            )
             return
         cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)
         frame_time = 1.0 / TARGET_FPS
+        landmarks = FaceLandmarks()
         try:
-            with mp.solutions.face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.5,
-                min_tracking_confidence=0.5,
-            ) as mesh:
-                while not self._stop.is_set():
-                    started = time.monotonic()
-                    ok, frame = cap.read()
-                    if not ok:
-                        self._on_error("The camera stopped delivering frames.")
-                        return
-                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    result = mesh.process(rgb)
-                    points = None
-                    if result.multi_face_landmarks:
-                        lm = result.multi_face_landmarks[0].landmark
-                        points = np.array([(p.x, p.y) for p in lm])
-                    with self._lock:
-                        frame_listener = self._frame_listener
-                    if frame_listener is not None:
-                        frame_listener(frame, points)
-                    self._publish(started, extract_features(points) if points is not None else None)
-                    time.sleep(max(0.0, frame_time - (time.monotonic() - started)))
+            while not self._stop.is_set():
+                started = time.monotonic()
+                ok, frame = cap.read()
+                if not ok:
+                    self._on_error("The camera stopped delivering frames.")
+                    return
+                points = landmarks.detect(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), started)
+                with self._lock:
+                    frame_listener = self._frame_listener
+                if frame_listener is not None:
+                    frame_listener(frame, points)
+                self._publish(started, extract_features(points) if points is not None else None)
+                time.sleep(max(0.0, frame_time - (time.monotonic() - started)))
         finally:
+            landmarks.close()
             cap.release()
 
     def _publish(self, t: float, features: np.ndarray | None) -> None:

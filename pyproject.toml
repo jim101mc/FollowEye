@@ -17,7 +17,7 @@ dependencies = [
     "anthropic>=2.14",
     "openai>=1.50",
     "opencv-python>=4.9",
-    "mediapipe>=0.10.14,<0.11",
+    "mediapipe>=0.10.30,<0.11",
     "mss>=9",
     "pynput>=1.7",
     "uiautomation>=2.0.18; sys_platform == 'win32'",
@@ -41,6 +41,9 @@ followeye = "followeye.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["followeye*"]
+
+[tool.setuptools.package-data]
+followeye = ["assets/*.task"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

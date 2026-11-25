@@ -21,6 +21,11 @@ jobs:
         run: python -m pytest -q
       - name: Build FollowEye.exe
         run: pyinstaller --noconfirm followeye.spec
+      - name: Self-test the built exe
+        run: |
+          $p = Start-Process dist/FollowEye/FollowEye.exe -ArgumentList "--self-test", "$PWD\selftest.txt" -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { exit 1 }
       - name: Zip
         run: Compress-Archive -Path dist/FollowEye -DestinationPath FollowEye-windows.zip
       - uses: actions/upload-artifact@v4
