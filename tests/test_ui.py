@@ -4,7 +4,6 @@ pytest.importorskip("PySide6")
 
 from cryptography.fernet import Fernet  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from followeye.apps import AppInfo  # noqa: E402
 from followeye.config import Settings  # noqa: E402
@@ -13,11 +12,6 @@ from followeye.modes import Behaviour, Mode, ProgramEntry, Routing, RuleAction, 
 from followeye.skills.analysis import SkillId  # noqa: E402
 from followeye.skills.skills import Suggestion, SuggestionAction  # noqa: E402
 from followeye.storage.vault import HistoryLog, Vault  # noqa: E402
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
 
 
 class FakeCatalog:
@@ -153,8 +147,70 @@ def test_tray_menu(qapp):
     from followeye.ui.tray import Tray
 
     tray = Tray()
+    tray.icon.setParent(qapp)  # destroyed with the app, not at interpreter exit
     settings = Settings()
-    tray.update(settings, paused=False, status="")
-    labels = [a.text() for a in tray.menu.actions()]
+    tray.update(settings, paused=False, status="", gaze_dot=True)
+    actions = {a.text(): a for a in tray.menu.actions()}
     for mode in settings.modes:
-        assert mode.name in labels
+        assert mode.name in actions
+    assert actions["Show gaze dot"].isChecked()
+    fired = []
+    tray.preview_requested.connect(lambda: fired.append("preview"))
+    tray.gaze_dot_toggled.connect(lambda: fired.append("dot"))
+    actions["Camera preview…"].trigger()
+    actions["Show gaze dot"].trigger()
+    assert fired == ["preview", "dot"]
+
+
+def face_points():
+    import numpy as np
+
+    lm = np.zeros((478, 2))
+    lm[[33, 362]] = [[0.30, 0.40], [0.55, 0.40]]
+    lm[[133, 263]] = [[0.45, 0.40], [0.70, 0.40]]
+    lm[[159, 386]] = [[0.37, 0.38], [0.62, 0.38]]
+    lm[[145, 374]] = [[0.37, 0.42], [0.62, 0.42]]
+    lm[[468, 473]] = [[0.375, 0.40], [0.625, 0.40]]
+    lm[1], lm[234], lm[454], lm[10], lm[152] = [0.5, 0.5], [0.2, 0.5], [0.8, 0.5], [0.5, 0.2], [0.5, 0.8]
+    return lm
+
+
+def test_camera_preview_annotation(qapp):
+    import numpy as np
+
+    from followeye.ui.camera_preview import EYES_CLOSED, NO_FACE, TRACKING, CameraPreview, annotate
+
+    frame = np.zeros((720, 1280, 3), np.uint8)
+    rgb, status = annotate(frame, None)
+    assert status == NO_FACE and rgb.shape == (270, 480, 3)
+    rgb, status = annotate(frame, face_points())
+    assert status == TRACKING and rgb.any()  # eye points drawn
+    closed = face_points()
+    closed[[145, 374], 1] = 0.381
+    assert annotate(frame, closed)[1] == EYES_CLOSED
+
+    preview = CameraPreview()
+    closed_events = []
+    preview.closed.connect(lambda: closed_events.append(True))
+    preview.frame.emit(*annotate(frame, face_points()))
+    qapp.processEvents()
+    assert preview.status.text() == TRACKING and not preview.image.pixmap().isNull()
+    preview.show_error("Could not open camera 0.")
+    assert preview.image.text() == "Could not open camera 0."
+    preview.close()
+    assert closed_events == [True]
+
+
+def test_gaze_dot_follows_and_greys_out(qapp):
+    from followeye.ui.gaze_dot import SIZE, GazeDot
+
+    dot = GazeDot()
+    dpr = qapp.primaryScreen().devicePixelRatio()
+    dot.update_gaze(400 * dpr, 300 * dpr)
+    assert dot.isVisible() and not dot.lost
+    assert (dot.x() + SIZE // 2, dot.y() + SIZE // 2) == (400, 300)
+    dot.update_gaze(None, None)
+    assert dot.lost and dot.isVisible()
+    dot.update_gaze(500 * dpr, 300 * dpr)
+    assert not dot.lost
+    dot.hide()
