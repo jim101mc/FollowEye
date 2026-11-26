@@ -17,7 +17,7 @@ Without a calibration, or when the webcam is unavailable, FollowEye follows the 
 
 ### Calibration
 
-Calibration takes about a minute and consists of three rounds of nine dots: at the normal sitting distance, closer to the screen, and farther away. During each round the background alternates between white, gray and black, so the model learns how the eyes look under different screen lighting. The gaze model combines the iris position with the 3D head pose (turn, tilt and distance) reported by MediaPipe, so moving the head shifts the estimate less. Dark camera images are brightened automatically before face detection.
+Calibration takes about a minute and consists of three rounds of nine dots: at the normal sitting distance, closer to the screen, and farther away. All screens use the same mid-gray background, so the light the screen casts on the face stays constant. The gaze model combines the iris position with the 3D head pose (turn, tilt and distance) reported by MediaPipe, so moving the head shifts the estimate less. Dark camera images are brightened automatically before face detection.
 
 A fourth, short round shows five new dots that are not used for training. The result screen reports the error measured on those dots, whether the estimate is consistently shifted in one direction, and how much it jitters. These figures are kept and shown under **Settings → Eye tracking**.
 
@@ -73,7 +73,7 @@ Modes are switched from the tray menu.
 
 ### Hotkeys
 
-All hotkeys can be rebound under **Settings → Notifications and hotkeys**. FollowEye rejects combinations that Windows reserves, that another program already holds, or that a different FollowEye action already uses.
+All hotkeys can be rebound under **Settings → Notifications and hotkeys**, where **Send test notification** also previews the card with the chosen position and timing. In the settings window, **Save** applies changes and keeps the window open; **Cancel** discards unsaved changes and closes it. FollowEye rejects combinations that Windows reserves, that another program already holds, or that a different FollowEye action already uses.
 
 | Action | Default |
 |--------|---------|

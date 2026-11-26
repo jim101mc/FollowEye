@@ -5,7 +5,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..apps import AppCatalog
-from ..config import HOTKEY_LABELS, ProviderConfig, Settings, WidgetCorner
+from ..config import HOTKEY_LABELS, NotificationSettings, ProviderConfig, Settings, WidgetCorner
 from ..models.base import ModelError, ProviderField, secret_name
 from ..models.registry import PLUGIN_HELP, ProviderRegistry
 from ..modes import Mode, preset_modes
@@ -171,6 +171,9 @@ class ProviderPanel(QGroupBox):
         self._inputs[f.key] = widget
         return widget
 
+    def refresh(self) -> None:
+        self._build(self.config())
+
     def config(self) -> ProviderConfig:
         provider_id = self.combo.currentData()
         options = {}
@@ -211,6 +214,8 @@ class ProviderPanel(QGroupBox):
 
 class SettingsDialog(QDialog):
     calibrate_requested = Signal()
+    saved = Signal()  # settings, secrets and profile are ready to apply; the window stays open
+    test_notification_requested = Signal(object)  # NotificationSettings as currently set in the window
 
     def __init__(
         self,
@@ -248,10 +253,15 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._gaze_tab(), "Eye tracking")
         self.tabs.addTab(self._history_tab(), "History")
 
+        footer = QHBoxLayout()
+        self.save_status = QLabel()
+        footer.addWidget(self.save_status, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        buttons.rejected.connect(self.reject)  # discards changes not saved yet
+        footer.addWidget(buttons)
+        layout.addLayout(footer)
+        self._status_timer = QTimer(self, singleShot=True, interval=2500, timeout=self.save_status.clear)
 
     def open_tab(self, name: str) -> None:
         if name in TABS:
@@ -441,6 +451,10 @@ class SettingsDialog(QDialog):
         self.show_threshold.setValue(n.show_threshold)
         self.show_threshold.setToolTip("Suggestions the model is less sure about are not shown.")
         form.addRow("Only show above confidence", self.show_threshold)
+        test = QPushButton("Send test notification")
+        test.setToolTip("Shows a sample suggestion with the position and timing set above, even before saving.")
+        test.clicked.connect(lambda: self.test_notification_requested.emit(self.notification_settings()))
+        form.addRow(test)
         layout.addWidget(group)
 
         hk_group = QGroupBox("Global hotkeys")
@@ -618,6 +632,14 @@ class SettingsDialog(QDialog):
 
     # --- Save -----------------------------------------------------------------------
 
+    def notification_settings(self) -> NotificationSettings:
+        return NotificationSettings(
+            corner=self.corner.currentData(),
+            auto_hide_seconds=self.auto_hide.value(),
+            cooldown_seconds=self.cooldown.value(),
+            show_threshold=self.show_threshold.value(),
+        )
+
     def _save(self) -> None:
         errors = [f"{HOTKEY_LABELS[k]}: {e.error}" for k, e in self.hotkey_edits.items() if e.error]
         if errors:
@@ -631,10 +653,7 @@ class SettingsDialog(QDialog):
         s.models.max_cloud_requests_per_hour = self.max_cloud.value()
         s.models.send_screenshots_to_cloud = self.send_screens.isChecked()
         s.models.share_profile_with_cloud = self.share_profile.isChecked()
-        s.notifications.corner = self.corner.currentData()
-        s.notifications.auto_hide_seconds = self.auto_hide.value()
-        s.notifications.cooldown_seconds = self.cooldown.value()
-        s.notifications.show_threshold = self.show_threshold.value()
+        s.notifications = self.notification_settings()
         for key, edit in self.hotkey_edits.items():
             setattr(s.hotkeys, key, edit.text())
         s.privacy.blocklist.programs = self.block_programs.programs()
@@ -644,7 +663,15 @@ class SettingsDialog(QDialog):
         s.gaze.enabled = self.gaze_enabled.isChecked()
         s.gaze.camera_index = self.camera.value()
         s.gaze.smoothing = self.smoothing.value()
-        self.accept()
+        self.saved.emit()
+        # Saved secrets now show as "Saved" and the new hotkeys belong to FollowEye.
+        self.local_panel.refresh()
+        self.cloud_panel.refresh()
+        held = {e.text() for e in self.hotkey_edits.values()}
+        for edit in self.hotkey_edits.values():
+            edit.set_owned(held)
+        self.save_status.setText("✓ Saved")
+        self._status_timer.start()
 
     def pending_secrets(self) -> dict[str, str | None]:
         return {**self.local_panel.pending_secrets(), **self.cloud_panel.pending_secrets()}

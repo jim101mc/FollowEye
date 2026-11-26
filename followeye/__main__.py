@@ -44,8 +44,16 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[RotatingFileHandler(home / "followeye.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")],
     )
+    if sys.platform == "win32":
+        import ctypes
+
+        # Own taskbar identity, so Windows shows FollowEye's icon instead of the generic Python one.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FollowEye.FollowEye")
     qapp = QApplication(sys.argv)
     qapp.setApplicationName("FollowEye")
+    from .ui.icons import eye_icon
+
+    qapp.setWindowIcon(eye_icon("active"))
     qapp.setQuitOnLastWindowClosed(False)
 
     lock = QLockFile(str(home / "followeye.lock"))

@@ -7,8 +7,18 @@ ACTIVE = QColor("#3EC7C2")
 PAUSED = QColor("#8A8F98")
 
 
-def eye_icon(state: str = "active", size: int = 64) -> QIcon:
-    """state: 'active', 'paused' or 'off'."""
+ICON_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+
+
+def eye_icon(state: str = "active") -> QIcon:
+    """state: 'active', 'paused' or 'off'. Drawn at every size Windows asks for, so it stays sharp."""
+    icon = QIcon()
+    for size in ICON_SIZES:
+        icon.addPixmap(_eye_pixmap(state, size))
+    return icon
+
+
+def _eye_pixmap(state: str, size: int) -> QPixmap:
     color = ACTIVE if state == "active" else PAUSED
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
@@ -33,4 +43,4 @@ def eye_icon(state: str = "active", size: int = 64) -> QIcon:
         p.drawRoundedRect(QRectF(26.5 * s, 26 * s, 4 * s, 12 * s), 1 * s, 1 * s)
         p.drawRoundedRect(QRectF(33.5 * s, 26 * s, 4 * s, 12 * s), 1 * s, 1 * s)
     p.end()
-    return QIcon(pix)
+    return pix

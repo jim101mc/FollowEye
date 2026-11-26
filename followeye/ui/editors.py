@@ -72,6 +72,16 @@ class HotkeyEdit(QWidget):
         self.edit.keySequenceChanged.connect(lambda _seq: self._validate())
         self._validate(emit=False)
 
+    def set_owned(self, held: set[str]) -> None:
+        """Combinations FollowEye itself now holds, so they don't count as taken by another program."""
+        self._owned = set()
+        for text in held:
+            try:
+                self._owned.add(parse_hotkey(text).text)
+            except HotkeyError:
+                continue
+        self._validate(emit=False)
+
     def set_conflict_source(self, others: Callable[[], dict[str, str]]) -> None:
         """`others` returns {action label: hotkey text} of the other FollowEye hotkeys."""
         self._others = others

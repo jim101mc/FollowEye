@@ -17,14 +17,15 @@ ROUNDS = (
     ("closer", "Round 2 of 3: move closer to the screen, about a hand's width."),
     ("farther", "Round 3 of 3: move back, a bit farther than usual."),
 )
-# The screen lights the face: changing its brightness teaches the model different lighting.
-BACKGROUNDS = (QColor(240, 240, 240), QColor(128, 128, 128), QColor(14, 15, 18))
-INTRO_BACKGROUND = QColor(16, 18, 22)
+# One steady mid-gray everywhere: the screen lights the face, so changing brightness would change the eyes.
+GRAY = QColor(128, 128, 128)
+BACKGROUNDS = (GRAY,)
+INTRO_BACKGROUND = GRAY
 # Accuracy test: new dots, never used for training, so the error shown is honest.
 TEST_POINTS = [(0.25, 0.28), (0.75, 0.28), (0.5, 0.18), (0.3, 0.74), (0.7, 0.74)]
 TEST_ROUND = len(ROUNDS)
 TEST_TEXT = "Last step: an accuracy test with 5 new dots. Sit as you normally do."
-TEST_BACKGROUND = QColor(128, 128, 128)
+TEST_BACKGROUND = GRAY
 INTRO_S = 3.5    # time to read the instruction and change position
 SETTLE_S = 0.7   # eyes travel to the dot
 COLLECT_S = 0.9  # samples are recorded
@@ -48,8 +49,7 @@ def _steps() -> list[_Step]:
     steps = []
     for r in range(len(ROUNDS)):
         steps.append(_Step(r, None, INTRO_BACKGROUND))
-        # Shift the background per round so every distance sees every brightness at different points.
-        steps += [_Step(r, i, BACKGROUNDS[(i + r) % len(BACKGROUNDS)]) for i in range(len(POINTS))]
+        steps += [_Step(r, i, GRAY) for i in range(len(POINTS))]
     steps.append(_Step(TEST_ROUND, None, INTRO_BACKGROUND))
     steps += [_Step(TEST_ROUND, i, TEST_BACKGROUND) for i in range(len(TEST_POINTS))]
     return steps
@@ -80,8 +80,8 @@ def _contrast(color: QColor) -> QColor:
 
 
 class CalibrationWindow(QWidget):
-    """Full-screen dots on the main display in three rounds (normal, closer, farther distance),
-    with a white, gray or black background; fits the gaze model from where the eyes were."""
+    """Full-screen dots on a mid-gray background in three rounds (normal, closer, farther distance)
+    plus an accuracy test on new dots; fits the gaze model from where the eyes were."""
 
     finished = Signal(object)  # Calibration | None
     feature = Signal(float, object)  # thread-safe entry point for the tracker's features
@@ -107,8 +107,7 @@ class CalibrationWindow(QWidget):
         self._samples: dict[tuple[int, int], list[np.ndarray]] = {}
         self._result: GazeModel | None = None
         self._test: AccuracyReport | None = None
-        self._message = ("Follow the dot with your eyes and keep your head still during each round.\n"
-                         "The background changes brightness on purpose. Esc cancels.")
+        self._message = "Follow the dot with your eyes and keep your head still during each round. Esc cancels."
         self._step_start = time.monotonic()
 
     @property

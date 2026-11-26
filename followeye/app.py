@@ -16,7 +16,7 @@ from .capture import screenshot, ui_automation
 from .capture.activity import ActivityListener
 from .capture.desktop import WindowsDesktop
 from .capture.ocr import WindowsOcr
-from .config import Settings, data_dir, load_settings, save_settings
+from .config import NotificationSettings, Settings, data_dir, load_settings, save_settings
 from .engine.pipeline import Pipeline, ScreenReader
 from .engine.triggers import TriggerEngine, TriggerEvent
 from .gaze.adapt import ClickRecalibrator
@@ -28,7 +28,8 @@ from .models.base import ModelError
 from .models.registry import ProviderRegistry
 from .modes import Behaviour, WindowInfo, resolve_behaviour
 from .skills.decision import DecisionLayer, EscalationLearner, HourlyBudget
-from .skills.skills import Suggestion
+from .skills.analysis import SkillId
+from .skills.skills import Suggestion, SuggestionAction
 from .storage.vault import EncryptedJsonFile, HistoryLog, Vault, get_secret, set_secret
 from .ui.calibration import CalibrationWindow
 from .ui.camera_preview import CameraPreview, annotate
@@ -559,23 +560,39 @@ class FollowEyeApp(QObject):
             self.profile, self.plugins_dir, self.plugin_errors, gaze_stats=self.gaze_stats(),
         )
         dialog.calibrate_requested.connect(self.calibrate)
+        dialog.saved.connect(lambda: self._settings_saved(dialog))
+        dialog.test_notification_requested.connect(self.show_test_notification)
         dialog.open_tab(tab)
         self._settings_dialog = dialog
-        dialog.finished.connect(lambda result: self._settings_closed(dialog, result))
+        dialog.finished.connect(self._settings_closed)
         dialog.show()
         dialog.activateWindow()
 
-    def _settings_closed(self, dialog: SettingsDialog, result: int) -> None:
-        self._settings_dialog = None
-        if not result:
-            return
+    def _settings_closed(self, _result: int) -> None:
+        self._settings_dialog = None  # changes not saved before closing are dropped with the window
+
+    def _settings_saved(self, dialog: SettingsDialog) -> None:
         for name, value in dialog.pending_secrets().items():
             set_secret(name, value)
         self.profile = dialog.profile()
         self.profile_store.save(self.profile)
-        self.settings = dialog.settings
+        # A copy: the window stays open and keeps editing its own settings until the next Save.
+        self.settings = dialog.settings.model_copy(deep=True)
         save_settings(self.settings)
         self._apply_settings()
+
+    def show_test_notification(self, preview: NotificationSettings) -> None:
+        sample = Suggestion(
+            skill=SkillId.CONTEXT,
+            title="Test notification",
+            body=f"This is how FollowEye's suggestions look. It hides by itself after {preview.auto_hide_seconds} s.",
+            source="test",
+            actions=[SuggestionAction("Looks good", lambda: "✓ Test finished.")],
+        )
+        saved = self.widget.settings
+        self.widget.settings = preview  # position and timing as set in the window, saved or not
+        self.widget.show_suggestion(sample)
+        self.widget.settings = saved
 
     def calibrate(self) -> None:
         if self._calibration is not None:

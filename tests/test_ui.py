@@ -6,7 +6,8 @@ from cryptography.fernet import Fernet  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 
 from followeye.apps import AppInfo  # noqa: E402
-from followeye.config import Settings  # noqa: E402
+from followeye.config import Settings, WidgetCorner  # noqa: E402
+from PySide6.QtWidgets import QPushButton  # noqa: E402
 from followeye.models.registry import ProviderRegistry  # noqa: E402
 from followeye.modes import Behaviour, Mode, ProgramEntry, Routing, RuleAction, RuleKind, Trigger, WindowRule  # noqa: E402
 from followeye.skills.analysis import SkillId  # noqa: E402
@@ -74,11 +75,23 @@ def test_settings_dialog_builds_and_saves(qapp, tmp_path):
     from PySide6.QtGui import QKeySequence
 
     dialog.hotkey_edits["pause"].edit.setKeySequence(QKeySequence("Ctrl+Alt+P"))
+    saves, tests = [], []
+    dialog.saved.connect(lambda: saves.append(dialog.pending_secrets()))
+    dialog.test_notification_requested.connect(tests.append)
+    dialog.corner.setCurrentIndex(dialog.corner.findData(WidgetCorner.TOP_LEFT))
+    dialog.auto_hide.setValue(7)
     dialog._save()
+    assert saves == [{"provider.anthropic.api_key": "sk-ant-test"}]  # secrets handed over on Save
+    assert dialog.pending_secrets() == {}  # and the key field now shows "Saved" instead of the key
+    assert not dialog.isHidden() or dialog.result() == 0  # Save keeps the window open
     s = dialog.settings
     assert s.models.local.provider_id == "ollama" and s.models.local.options["model"] == "llama3.2"
     assert s.models.cloud.options["model"] == "claude-opus-5-5"
-    assert dialog.pending_secrets() == {"provider.anthropic.api_key": "sk-ant-test"}
+    assert s.notifications.corner is WidgetCorner.TOP_LEFT and s.notifications.auto_hide_seconds == 7
+    dialog.auto_hide.setValue(9)
+    test_button = next(b for b in dialog.findChildren(QPushButton) if b.text() == "Send test notification")
+    test_button.click()
+    assert tests[0].corner is WidgetCorner.TOP_LEFT and tests[0].auto_hide_seconds == 9  # unsaved values preview
     assert s.hotkeys.pause == "Ctrl+Alt+P"
     assert dialog.profile() == {"Email": "a@b.c"}
 
@@ -102,9 +115,17 @@ def test_hotkey_conflicts_are_reported(qapp, tmp_path, monkeypatch):
     assert "taken by another program" in pause.error
     pause.edit.setKeySequence(QKeySequence("Shift+K"))
     assert "Ctrl, Alt or Win" in pause.error
+    saves = []
+    dialog.saved.connect(lambda: saves.append(True))
     dialog._save()
-    assert dialog.result() == 0  # refused to save
-    assert "Ctrl, Alt or Win" in warnings[0]
+    assert saves == [] and "Ctrl, Alt or Win" in warnings[0]  # refused to save
+
+    # After a successful save the new combination is FollowEye's own, not "taken by another program".
+    pause.edit.setKeySequence(QKeySequence("Ctrl+Alt+K"))
+    pause.set_owned({"Ctrl+Alt+K"})
+    assert pause.error is None
+    dialog._save()
+    assert saves == [True] and dialog.result() == 0 and "Saved" in dialog.save_status.text()
 
 
 def test_glass_widget_flow(qapp):
@@ -135,10 +156,8 @@ def test_calibration_fit(qapp):
 
     steps = cal._steps()
     assert len(steps) == 3 * (len(cal.POINTS) + 1) + 1 + len(cal.TEST_POINTS)
-    # Every distance round sees every background brightness.
-    for r in range(3):
-        colors = {s.background.name() for s in steps if s.round == r and s.point is not None}
-        assert colors == {c.name() for c in cal.BACKGROUNDS}
+    # One steady mid-gray background everywhere: no lighting changes during calibration.
+    assert {st.background.name() for st in steps} == {cal.GRAY.name()}
     assert steps[-1].round == cal.TEST_ROUND
 
     window = cal.CalibrationWindow()
