@@ -19,6 +19,19 @@ Without a calibration, or when the webcam is unavailable, FollowEye follows the 
 
 Calibration takes about a minute and consists of three rounds of nine dots: at the normal sitting distance, closer to the screen, and farther away. During each round the background alternates between white, gray and black, so the model learns how the eyes look under different screen lighting. The gaze model combines the iris position with the 3D head pose (turn, tilt and distance) reported by MediaPipe, so moving the head shifts the estimate less. Dark camera images are brightened automatically before face detection.
 
+A fourth, short round shows five new dots that are not used for training. The result screen reports the error measured on those dots, whether the estimate is consistently shifted in one direction, and how much it jitters. These figures are kept and shown under **Settings → Eye tracking**.
+
+### Correction from clicks
+
+When the user clicks, they are almost certainly looking at the mouse pointer, so every left click serves as a free calibration point. FollowEye compares the gaze estimate from just before the click with the click position and learns a correction:
+
+- after 3 clicks, a constant shift, applied partially at first so that a few imprecise clicks cannot push the estimate off;
+- after 15 clicks, an additional correction of scale and rotation;
+- recent clicks count more than older ones (half-life of 15 minutes), so the correction follows drift during the day;
+- clicks far away from the estimate are treated as clicks made without looking and are ignored.
+
+Before each click is learned from, its error is recorded. The average over recent clicks is shown under **Settings → Eye tracking** as the live accuracy, together with the current correction. Corrections are kept for the running session and reset after a new calibration.
+
 ### Checking the eye tracking
 
 Two tools in the tray menu help verify that tracking works:

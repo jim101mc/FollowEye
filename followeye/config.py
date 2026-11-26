@@ -68,7 +68,10 @@ class Calibration(BaseModel):
     feature_mean: list[float]
     feature_std: list[float]
     screen: tuple[int, int, int, int]  # physical pixels: left, top, width, height
-    mean_error_px: float = 0.0
+    mean_error_px: float = 0.0  # on the calibration dots themselves (optimistic)
+    test_error_px: float | None = None  # on new dots not used for training
+    test_bias_px: tuple[float, float] | None = None  # average (right, down) offset on the test dots
+    test_jitter_px: float | None = None
     version: int = 1  # files written before versioning are version 1
 
 

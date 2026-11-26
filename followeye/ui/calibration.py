@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ..config import Calibration
-from ..gaze.model import GazeModel, robust_mean_filter
+from ..gaze.model import AccuracyReport, GazeModel, accuracy_report, robust_mean_filter
 
 POINTS = [(x, y) for y in (0.08, 0.5, 0.92) for x in (0.06, 0.5, 0.94)]
 ROUNDS = (
@@ -20,6 +20,11 @@ ROUNDS = (
 # The screen lights the face: changing its brightness teaches the model different lighting.
 BACKGROUNDS = (QColor(240, 240, 240), QColor(128, 128, 128), QColor(14, 15, 18))
 INTRO_BACKGROUND = QColor(16, 18, 22)
+# Accuracy test: new dots, never used for training, so the error shown is honest.
+TEST_POINTS = [(0.25, 0.28), (0.75, 0.28), (0.5, 0.18), (0.3, 0.74), (0.7, 0.74)]
+TEST_ROUND = len(ROUNDS)
+TEST_TEXT = "Last step: an accuracy test with 5 new dots. Sit as you normally do."
+TEST_BACKGROUND = QColor(128, 128, 128)
 INTRO_S = 3.5    # time to read the instruction and change position
 SETTLE_S = 0.7   # eyes travel to the dot
 COLLECT_S = 0.9  # samples are recorded
@@ -45,7 +50,29 @@ def _steps() -> list[_Step]:
         steps.append(_Step(r, None, INTRO_BACKGROUND))
         # Shift the background per round so every distance sees every brightness at different points.
         steps += [_Step(r, i, BACKGROUNDS[(i + r) % len(BACKGROUNDS)]) for i in range(len(POINTS))]
+    steps.append(_Step(TEST_ROUND, None, INTRO_BACKGROUND))
+    steps += [_Step(TEST_ROUND, i, TEST_BACKGROUND) for i in range(len(TEST_POINTS))]
     return steps
+
+
+def _point(step_round: int, index: int) -> tuple[float, float]:
+    return TEST_POINTS[index] if step_round == TEST_ROUND else POINTS[index]
+
+
+def describe_accuracy(report: AccuracyReport, screen_width: int) -> str:
+    """Plain-language summary: overall error, constant offset and jitter."""
+    pct = 100 * report.error_px / screen_width
+    parts = [f"On new dots it is off by {report.error_px:.0f} px on average (about {pct:.0f}% of the screen width)."]
+    dx, dy = report.bias_px
+    shifts = []
+    if abs(dx) >= 0.4 * report.error_px and abs(dx) >= 20:
+        shifts.append(f"{abs(dx):.0f} px too far {'right' if dx > 0 else 'left'}")
+    if abs(dy) >= 0.4 * report.error_px and abs(dy) >= 20:
+        shifts.append(f"{abs(dy):.0f} px too {'low' if dy > 0 else 'high'}")
+    if shifts:
+        parts.append("It tends to land " + " and ".join(shifts) + "; clicking around will correct this.")
+    parts.append(f"Jitter: {report.jitter_px:.0f} px.")
+    return " ".join(parts)
 
 
 def _contrast(color: QColor) -> QColor:
@@ -79,6 +106,7 @@ class CalibrationWindow(QWidget):
         self._index = -1
         self._samples: dict[tuple[int, int], list[np.ndarray]] = {}
         self._result: GazeModel | None = None
+        self._test: AccuracyReport | None = None
         self._message = ("Follow the dot with your eyes and keep your head still during each round.\n"
                          "The background changes brightness on purpose. Esc cancels.")
         self._step_start = time.monotonic()
@@ -111,11 +139,14 @@ class CalibrationWindow(QWidget):
         return (geo.x() + fx * geo.width()) * dpr, (geo.y() + fy * geo.height()) * dpr
 
     def _fit(self) -> None:
-        feats, targets = [], []
+        feats, targets, test_points = [], [], []
         good_per_round = [0] * len(ROUNDS)
         for (r, i), samples in self._samples.items():
             kept = robust_mean_filter(np.array(samples))
             if len(kept) < MIN_SAMPLES_PER_POINT:
+                continue
+            if r == TEST_ROUND:
+                test_points.append((kept, self._physical(*TEST_POINTS[i])))
                 continue
             good_per_round[r] += 1
             feats.extend(kept)
@@ -129,9 +160,12 @@ class CalibrationWindow(QWidget):
         dpr = self.screen_.devicePixelRatio()
         screen = (int(geo.x() * dpr), int(geo.y() * dpr), int(geo.width() * dpr), int(geo.height() * dpr))
         self._result = GazeModel.fit(np.array(feats), np.array(targets, dtype=np.float64), screen)
-        pct = 100 * self._result.mean_error_px / screen[2]
-        self._message = (f"Done. Average error {self._result.mean_error_px:.0f} px (about {pct:.0f}% of the screen width).\n"
-                         + self._weak_hint(weak) + "Enter to save · R to redo · Esc to cancel")
+        self._test = accuracy_report(self._result, test_points) if len(test_points) >= 3 else None
+        if self._test is not None:
+            summary = describe_accuracy(self._test, screen[2])
+        else:
+            summary = "The accuracy test didn't get enough data, so its result is missing."
+        self._message = "Done. " + summary + "\n" + self._weak_hint(weak) + "Enter to save · R to redo · Esc to cancel"
 
     @staticmethod
     def _weak_hint(weak: list[str]) -> str:
@@ -148,7 +182,7 @@ class CalibrationWindow(QWidget):
             self._restart()
             self._timer.start()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._result is not None:
-            self._close(self._result.to_calibration())
+            self._close(self._result.to_calibration(self._test))
 
     def _close(self, result: Calibration | None) -> None:
         self._timer.stop()
@@ -165,14 +199,14 @@ class CalibrationWindow(QWidget):
         p.setFont(QFont("Segoe UI", 18))
         if step is None:
             p.setPen(fg)
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._message)
+            p.drawText(self.rect().adjusted(160, 0, -160, 0), int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap), self._message)
         elif step.point is None:
             remaining = max(0.0, INTRO_S - (time.monotonic() - self._step_start))
             p.setPen(fg)
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                       f"{ROUNDS[step.round][1]}\nStarting in {remaining:.0f} s")
+                       f"{TEST_TEXT if step.round == TEST_ROUND else ROUNDS[step.round][1]}\nStarting in {remaining:.0f} s")
         else:
-            fx, fy = POINTS[step.point]
+            fx, fy = _point(step.round, step.point)
             center = QPointF(fx * self.width(), fy * self.height())
             progress = min(1.0, (time.monotonic() - self._step_start) / step.duration)
             p.setPen(Qt.PenStyle.NoPen)

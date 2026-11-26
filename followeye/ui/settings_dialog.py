@@ -223,6 +223,7 @@ class SettingsDialog(QDialog):
         profile: dict[str, str],
         plugins_dir: Path,
         plugin_errors: list[str],
+        gaze_stats: str = "",
         parent=None,
     ):
         super().__init__(parent)
@@ -234,6 +235,7 @@ class SettingsDialog(QDialog):
         self.history = history
         self._profile = dict(profile)
         self._plugins_dir = plugins_dir
+        self._gaze_stats = gaze_stats
 
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -549,7 +551,9 @@ class SettingsDialog(QDialog):
         form.addRow("Smoothing", self.smoothing)
         layout.addLayout(form)
         if g.calibration:
-            status = f"Calibrated – average error {g.calibration.mean_error_px:.0f} px."
+            status = "Calibrated."
+            if self._gaze_stats:
+                status += "\n" + self._gaze_stats + "\n"
         else:
             status = "Not calibrated yet. Until then FollowEye follows the active window instead of your eyes."
         label = QLabel(status + " Calibrate on your main display, sitting as you normally do.")

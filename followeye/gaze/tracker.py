@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -13,6 +14,7 @@ from .model import GazeModel, OneEuroFilter, extract_features
 log = logging.getLogger(__name__)
 
 TARGET_FPS = 30
+HISTORY_FRAMES = 90  # about 3 seconds
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,8 @@ class GazeTracker:
         self._filter: OneEuroFilter | None = None
         self._feature_listener: FeatureCallback | None = None
         self._frame_listener: FrameCallback | None = None
+        self._correction: Callable[[float, float], tuple[float, float]] | None = None
+        self._history: deque[tuple[float, np.ndarray]] = deque(maxlen=HISTORY_FRAMES)
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -50,6 +54,17 @@ class GazeTracker:
         with self._lock:
             self._model = model
             self._filter = smoothing_filter
+
+    def set_correction(self, correction: Callable[[float, float], tuple[float, float]] | None) -> None:
+        """Applied to every raw screen estimate before smoothing (click recalibration)."""
+        with self._lock:
+            self._correction = correction
+
+    def recent_features(self, t0: float, t1: float) -> np.ndarray:
+        """Gaze features of the frames captured between monotonic times t0 and t1 (blinks excluded)."""
+        with self._lock:
+            rows = [f for t, f in self._history if t0 <= t <= t1]
+        return np.array(rows) if rows else np.empty((0, 0))
 
     def set_feature_listener(self, listener: FeatureCallback | None) -> None:
         with self._lock:
@@ -128,7 +143,9 @@ class GazeTracker:
 
     def _publish(self, t: float, features: np.ndarray | None) -> None:
         with self._lock:
-            listener, model, smoother = self._feature_listener, self._model, self._filter
+            listener, model, smoother, correction = self._feature_listener, self._model, self._filter, self._correction
+            if features is not None:
+                self._history.append((t, features))
         if listener is not None:
             listener(t, features)
         if model is None:
@@ -137,6 +154,8 @@ class GazeTracker:
             self._on_gaze(GazeSample(t, None, None))
             return
         x, y = model.predict(features)
+        if correction is not None:
+            x, y = correction(x, y)
         if not model.on_screen(x, y):
             if smoother:
                 smoother.reset()

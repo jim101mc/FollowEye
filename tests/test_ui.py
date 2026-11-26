@@ -134,11 +134,12 @@ def test_calibration_fit(qapp):
     from followeye.ui import calibration as cal
 
     steps = cal._steps()
-    assert len(steps) == 3 * (len(cal.POINTS) + 1)
+    assert len(steps) == 3 * (len(cal.POINTS) + 1) + 1 + len(cal.TEST_POINTS)
     # Every distance round sees every background brightness.
     for r in range(3):
         colors = {s.background.name() for s in steps if s.round == r and s.point is not None}
         assert colors == {c.name() for c in cal.BACKGROUNDS}
+    assert steps[-1].round == cal.TEST_ROUND
 
     window = cal.CalibrationWindow()
     rng = np.random.default_rng(1)
@@ -146,10 +147,20 @@ def test_calibration_fit(qapp):
         for i, (fx, fy) in enumerate(cal.POINTS):
             base = np.array([fx, fy, 0, 0, 0, 0, 0, dist])
             window._samples[(r, i)] = [base + rng.normal(0, 0.002, 8) for _ in range(20)]
+    for i, (fx, fy) in enumerate(cal.TEST_POINTS):
+        base = np.array([fx, fy, 0, 0, 0, 0, 0, -60.0])
+        window._samples[(cal.TEST_ROUND, i)] = [base + rng.normal(0, 0.002, 8) for _ in range(20)]
     window._index = len(steps)
     window._fit()
-    assert window._result is not None
-    assert "Average error" in window._message and "often lost" not in window._message
+    assert window._result is not None and window._test is not None
+    assert "On new dots" in window._message and "often lost" not in window._message
+    saved = window._result.to_calibration(window._test)
+    assert saved.test_error_px is not None and saved.test_jitter_px is not None
+
+    # Test dots never become training data: without them the fit still works, the test is just missing.
+    del window._samples[(cal.TEST_ROUND, 0)], window._samples[(cal.TEST_ROUND, 1)], window._samples[(cal.TEST_ROUND, 2)]
+    window._fit()
+    assert window._test is None and "accuracy test didn't get enough data" in window._message
 
     # A round where the eyes were lost is pointed out.
     for i in range(len(cal.POINTS)):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -57,6 +58,30 @@ def _design(z: np.ndarray) -> np.ndarray:
     return np.stack(cols, axis=1)
 
 
+@dataclass(frozen=True)
+class AccuracyReport:
+    error_px: float                # mean distance from target, using each point's averaged estimate
+    bias_px: tuple[float, float]   # mean (right, down) offset: a constant shift in one direction
+    jitter_px: float               # mean spread of single-frame estimates around their average
+
+
+def accuracy_report(model: GazeModel, points: list[tuple[np.ndarray, tuple[float, float]]]) -> AccuracyReport | None:
+    """Accuracy on dots the model was not trained on. `points` holds (samples, target) per dot."""
+    errors, offsets, spreads = [], [], []
+    for samples, target in points:
+        if len(samples) == 0:
+            continue
+        preds = np.array([model.predict(s) for s in samples])
+        mean = preds.mean(axis=0)
+        offsets.append(mean - np.asarray(target))
+        errors.append(float(np.linalg.norm(mean - np.asarray(target))))
+        spreads.append(float(np.sqrt(np.mean(np.sum((preds - mean) ** 2, axis=1)))))
+    if not errors:
+        return None
+    bias = np.mean(offsets, axis=0)
+    return AccuracyReport(float(np.mean(errors)), (float(bias[0]), float(bias[1])), float(np.mean(spreads)))
+
+
 def robust_mean_filter(samples: np.ndarray, k: float = 2.5) -> np.ndarray:
     """Drop samples far from the median (eyes still travelling, blinks half-detected)."""
     if len(samples) < 4:
@@ -99,13 +124,16 @@ class GazeModel:
         left, top, w, h = self.screen
         return (left - margin * w <= x <= left + w * (1 + margin)) and (top - margin * h <= y <= top + h * (1 + margin))
 
-    def to_calibration(self) -> Calibration:
+    def to_calibration(self, test: AccuracyReport | None = None) -> Calibration:
         return Calibration(
             coefficients=self.coefficients.tolist(),
             feature_mean=self.mean.tolist(),
             feature_std=self.std.tolist(),
             screen=self.screen,
             mean_error_px=self.mean_error_px,
+            test_error_px=test.error_px if test else None,
+            test_bias_px=test.bias_px if test else None,
+            test_jitter_px=test.jitter_px if test else None,
             version=CALIBRATION_VERSION,
         )
 

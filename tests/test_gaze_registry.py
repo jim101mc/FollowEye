@@ -48,6 +48,27 @@ def test_gaze_model_compensates_for_head_and_distance():
     assert model.on_screen(100, 100) and not model.on_screen(5000, 100)
 
 
+def test_accuracy_report_and_description():
+    from followeye.gaze.model import accuracy_report
+    from followeye.ui.calibration import describe_accuracy
+
+    rng = np.random.default_rng(3)
+    feats = rng.uniform(0.3, 0.7, size=(300, 8))
+    model = GazeModel.fit(feats, np.column_stack([feats[:, 0] * 2000, feats[:, 1] * 1000]), screen=(0, 0, 1920, 1080))
+    points = []
+    for _ in range(5):
+        base = rng.uniform(0.35, 0.65, size=8)
+        samples = base + rng.normal(0, 0.003, size=(15, 8))
+        tx, ty = base[0] * 2000 - 80, base[1] * 1000  # true target 80 px left of where the model lands
+        points.append((samples, (tx, ty)))
+    report = accuracy_report(model, points)
+    assert 70 < report.error_px < 95 and 70 < report.bias_px[0] < 95 and report.jitter_px < 20
+    text = describe_accuracy(report, 1920)
+    assert "too far right" in text and "Jitter" in text
+    assert accuracy_report(model, [(np.empty((0, 8)), (0, 0))]) is None
+    assert model.to_calibration(report).test_error_px == report.error_px
+
+
 def test_old_calibration_files_are_version_1():
     old = Calibration.model_validate({"coefficients": [[0, 0]], "feature_mean": [0], "feature_std": [1],
                                       "screen": [0, 0, 1920, 1080]})

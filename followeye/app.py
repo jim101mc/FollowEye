@@ -7,6 +7,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
 import uiautomation as auto
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
@@ -18,6 +19,7 @@ from .capture.ocr import WindowsOcr
 from .config import Settings, data_dir, load_settings, save_settings
 from .engine.pipeline import Pipeline, ScreenReader
 from .engine.triggers import TriggerEngine, TriggerEvent
+from .gaze.adapt import ClickRecalibrator
 from .gaze.model import CALIBRATION_VERSION, GazeModel, filter_for_smoothing
 from .gaze.resolver import WindowResolver
 from .gaze.tracker import GazeSample, GazeTracker
@@ -41,6 +43,7 @@ from .winapi.hotkeys import HotkeyManager, is_hotkey_free
 log = logging.getLogger(__name__)
 
 FOREGROUND_POLL_S = 0.1
+CLICK_LOOK_WINDOW = (0.4, 0.05)  # seconds before a click when the eyes are on the target
 DUPLICATE_WINDOW_S = 600
 EXCLUDED_CLIPBOARD_FORMAT = "ExcludeClipboardContentFromMonitorProcessing"
 
@@ -146,7 +149,9 @@ class FollowEyeApp(QObject):
         self._engine_thread = threading.Thread(target=self._engine_loop, name="engine", daemon=True)
 
         self.tracker = GazeTracker(self.settings.gaze.camera_index, self._on_gaze, self.bridge.gaze_error.emit)
-        self.activity = ActivityListener(on_key=self._on_key, on_scroll=self._on_scroll)
+        self.activity = ActivityListener(on_key=self._on_key, on_scroll=self._on_scroll, on_click=self._on_click)
+        self._gaze_model: GazeModel | None = None
+        self.recalibrator: ClickRecalibrator | None = None
         self.qapp.clipboard().dataChanged.connect(self._on_clipboard)
         self.hotkeys = HotkeyManager()
 
@@ -297,6 +302,37 @@ class FollowEyeApp(QObject):
         if self._observing():
             self._inputs.put(("key", time.monotonic()))
 
+    def _on_click(self, x: int, y: int) -> None:
+        """Mouse-hook thread: a click is a free calibration point, the user was looking at the cursor."""
+        model, recal = self._gaze_model, self.recalibrator
+        if model is None or recal is None or not self.tracker.running:
+            return
+        now = time.monotonic()
+        features = self.tracker.recent_features(now - CLICK_LOOK_WINDOW[0], now - CLICK_LOOK_WINDOW[1])
+        if len(features) < 3:
+            return  # blinking or face not found just before the click
+        raw = model.predict(np.median(features, axis=0))
+        recal.add(now, raw, (float(x), float(y)))
+
+    def gaze_stats(self) -> str:
+        cal = self.settings.gaze.calibration
+        lines = []
+        if cal is not None and cal.test_error_px is not None:
+            bx, by = cal.test_bias_px or (0.0, 0.0)
+            lines.append(f"Accuracy test at calibration: {cal.test_error_px:.0f} px off on average, "
+                         f"offset {bx:+.0f} px right / {by:+.0f} px down, jitter {cal.test_jitter_px:.0f} px.")
+        recal = self.recalibrator
+        if recal is not None:
+            live = recal.live_error_px
+            if live is None:
+                lines.append(f"Learning from your clicks: {recal.clicks_used} used so far (needs 5 for a live accuracy figure).")
+            else:
+                sx, sy = recal.shift_px
+                lines.append(f"Live accuracy from your last clicks: {live:.0f} px off on average. "
+                             f"Current correction {sx:+.0f} px right / {sy:+.0f} px down, "
+                             f"{recal.clicks_used} clicks used, {recal.rejected} ignored.")
+        return "\n".join(lines)
+
     def _on_scroll(self, x: int, y: int) -> None:
         if self._observing():
             self._inputs.put(("scroll", time.monotonic(), x, y))
@@ -324,9 +360,15 @@ class FollowEyeApp(QObject):
                 self.tracker.stop()
             self.tracker.camera_index = g.camera_index
             if calibrated:
-                self.tracker.set_model(GazeModel.from_calibration(g.calibration), filter_for_smoothing(g.smoothing))
+                self._gaze_model = GazeModel.from_calibration(g.calibration)
+                if self.recalibrator is None:
+                    self.recalibrator = ClickRecalibrator(g.calibration.screen)
+                self.tracker.set_model(self._gaze_model, filter_for_smoothing(g.smoothing))
+                self.tracker.set_correction(self.recalibrator.correct)
             else:
+                self._gaze_model = None
                 self.tracker.set_model(None, None)
+                self.tracker.set_correction(None)
             self.tracker.start()
         else:
             self.tracker.stop()
@@ -514,7 +556,7 @@ class FollowEyeApp(QObject):
             return
         dialog = SettingsDialog(
             self.settings, self.registry, self.catalog, get_secret, is_hotkey_free, self.history,
-            self.profile, self.plugins_dir, self.plugin_errors,
+            self.profile, self.plugins_dir, self.plugin_errors, gaze_stats=self.gaze_stats(),
         )
         dialog.calibrate_requested.connect(self.calibrate)
         dialog.open_tab(tab)
@@ -546,6 +588,8 @@ class FollowEyeApp(QObject):
         self._calibration = window
         self.tracker.camera_index = self.settings.gaze.camera_index
         self.tracker.set_model(None, None)
+        self.tracker.set_correction(None)
+        self._gaze_model = None
         self.tracker.set_feature_listener(window.feature.emit)
         window.finished.connect(self._calibration_finished)
         self.tracker.start()
@@ -559,5 +603,7 @@ class FollowEyeApp(QObject):
             self.settings.gaze.calibration = result
             self.settings.gaze.enabled = True
             save_settings(self.settings)
-            self.tray.message("Calibration saved", f"Average error {result.mean_error_px:.0f} px.")
+            self.recalibrator = None  # corrections learned for the old calibration no longer apply
+            error = result.test_error_px if result.test_error_px is not None else result.mean_error_px
+            self.tray.message("Calibration saved", f"Accuracy test: {error:.0f} px off on average.")
         self._update_tracker()
