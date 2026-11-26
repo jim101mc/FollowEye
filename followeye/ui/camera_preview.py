@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ..gaze.model import EYE_A, EYE_B, extract_features
+from ..gaze.model import EYE_A, EYE_B, eye_ratios
 
 PREVIEW_WIDTH = 480
 GREEN = (120, 220, 120)
@@ -15,22 +15,25 @@ TEAL = (194, 199, 62)  # BGR
 NO_FACE = "No face found. Face the camera and make sure your face is well lit."
 EYES_CLOSED = "Face found, but the eyes are closed or hidden (glare on glasses?)."
 TRACKING = "Tracking both eyes."
+LOW_LIGHT = "The room is dark: the image is brightened automatically, more light improves accuracy."
 
 
-def annotate(frame_bgr: np.ndarray, points: np.ndarray | None) -> tuple[np.ndarray, str]:
+def annotate(frame_bgr: np.ndarray, points: np.ndarray | None, brightened: bool = False) -> tuple[np.ndarray, str]:
     """Mirror the frame like a selfie view, draw eye outlines and irises; returns (RGB image, status)."""
     image = frame_bgr.copy()
     h, w = image.shape[:2]
     if points is None or points.shape[0] < 478:
         status = NO_FACE
     else:
-        status = TRACKING if extract_features(points) is not None else EYES_CLOSED
+        status = TRACKING if eye_ratios(points) is not None else EYES_CLOSED
         for eye in (EYE_A, EYE_B):
             for key in ("left", "right", "top", "bottom"):
                 x, y = points[eye[key]]
                 cv2.circle(image, (int(x * w), int(y * h)), 2, GREEN, -1, cv2.LINE_AA)
             ix, iy = points[eye["iris"]]
             cv2.circle(image, (int(ix * w), int(iy * h)), 5, TEAL, 2, cv2.LINE_AA)
+    if brightened:
+        status += " " + LOW_LIGHT
     image = cv2.flip(image, 1)
     scale = PREVIEW_WIDTH / w
     if scale < 1:

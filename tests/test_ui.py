@@ -133,14 +133,29 @@ def test_calibration_fit(qapp):
 
     from followeye.ui import calibration as cal
 
+    steps = cal._steps()
+    assert len(steps) == 3 * (len(cal.POINTS) + 1)
+    # Every distance round sees every background brightness.
+    for r in range(3):
+        colors = {s.background.name() for s in steps if s.round == r and s.point is not None}
+        assert colors == {c.name() for c in cal.BACKGROUNDS}
+
     window = cal.CalibrationWindow()
     rng = np.random.default_rng(1)
-    for i, (fx, fy) in enumerate(cal.POINTS):
-        window._samples[i] = [np.array([fx, fy, 0.5, 0.5, 0.0, 0.0]) + rng.normal(0, 0.002, 6) for _ in range(20)]
-    window._index = len(cal.POINTS)
+    for r, dist in enumerate((-60.0, -45.0, -75.0)):
+        for i, (fx, fy) in enumerate(cal.POINTS):
+            base = np.array([fx, fy, 0, 0, 0, 0, 0, dist])
+            window._samples[(r, i)] = [base + rng.normal(0, 0.002, 8) for _ in range(20)]
+    window._index = len(steps)
     window._fit()
     assert window._result is not None
-    assert "Average error" in window._message
+    assert "Average error" in window._message and "often lost" not in window._message
+
+    # A round where the eyes were lost is pointed out.
+    for i in range(len(cal.POINTS)):
+        window._samples[(2, i)] = window._samples[(2, i)][:3]
+    window._fit()
+    assert "“farther” round" in window._message
 
 
 def test_tray_menu(qapp):
@@ -188,6 +203,7 @@ def test_camera_preview_annotation(qapp):
     closed = face_points()
     closed[[145, 374], 1] = 0.381
     assert annotate(frame, closed)[1] == EYES_CLOSED
+    assert "dark" in annotate(frame, face_points(), brightened=True)[1]
 
     preview = CameraPreview()
     closed_events = []

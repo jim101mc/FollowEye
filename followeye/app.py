@@ -18,7 +18,7 @@ from .capture.ocr import WindowsOcr
 from .config import Settings, data_dir, load_settings, save_settings
 from .engine.pipeline import Pipeline, ScreenReader
 from .engine.triggers import TriggerEngine, TriggerEvent
-from .gaze.model import GazeModel, filter_for_smoothing
+from .gaze.model import CALIBRATION_VERSION, GazeModel, filter_for_smoothing
 from .gaze.resolver import WindowResolver
 from .gaze.tracker import GazeSample, GazeTracker
 from .hotkeys import HotkeyError, validate_hotkey
@@ -74,6 +74,11 @@ class FollowEyeApp(QObject):
         super().__init__()
         self.qapp = qapp
         self.settings: Settings = load_settings()
+        old = self.settings.gaze.calibration
+        self._recalibrate = old is not None and old.version != CALIBRATION_VERSION
+        if self._recalibrate:
+            self.settings.gaze.calibration = None
+            save_settings(self.settings)
         home = data_dir()
         self.vault = Vault()
         self.history = HistoryLog(home / "history.log", self.vault, self.settings.privacy.retention_days)
@@ -177,8 +182,9 @@ class FollowEyeApp(QObject):
         threading.Thread(target=self._build_pipeline, name="models", daemon=True).start()
         self._refresh_tray()
         if first_run and s.gaze.enabled and s.gaze.calibration is None:
-            self.tray.message("FollowEye is running",
-                              "Calibrate eye tracking from the tray icon. Until then FollowEye follows the active window.")
+            title = "Eye tracking was improved" if self._recalibrate else "FollowEye is running"
+            self.tray.message(title, "Calibrate eye tracking from the tray icon. "
+                                     "Until then FollowEye follows the active window.")
 
     def _build_pipeline(self) -> None:
         m = self.settings.models
@@ -360,7 +366,9 @@ class FollowEyeApp(QObject):
         preview = CameraPreview()
         self._preview = preview
         preview.closed.connect(self._preview_closed)
-        self.tracker.set_frame_listener(lambda frame, points: preview.frame.emit(*annotate(frame, points)))
+        self.tracker.set_frame_listener(
+            lambda frame, points, brightened: preview.frame.emit(*annotate(frame, points, brightened))
+        )
         self._update_tracker()
         preview.show()
         preview.activateWindow()

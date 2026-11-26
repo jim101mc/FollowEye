@@ -69,6 +69,7 @@ class Calibration(BaseModel):
     feature_std: list[float]
     screen: tuple[int, int, int, int]  # physical pixels: left, top, width, height
     mean_error_px: float = 0.0
+    version: int = 1  # files written before versioning are version 1
 
 
 class GazeSettings(BaseModel):

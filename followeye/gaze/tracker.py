@@ -24,7 +24,7 @@ class GazeSample:
 
 FeatureCallback = Callable[[float, np.ndarray | None], None]
 GazeCallback = Callable[[GazeSample], None]
-FrameCallback = Callable[[np.ndarray, np.ndarray | None], None]
+FrameCallback = Callable[[np.ndarray, np.ndarray | None, bool], None]  # frame, points, brightened
 
 
 class GazeTracker:
@@ -56,7 +56,8 @@ class GazeTracker:
             self._feature_listener = listener
 
     def set_frame_listener(self, listener: FrameCallback | None) -> None:
-        """Receives every camera frame (BGR) with its face landmarks, or None if no face was found."""
+        """Receives every camera frame (BGR, as given to the detector) with its face landmarks or None,
+        and whether the frame was brightened for low light."""
         with self._lock:
             self._frame_listener = listener
 
@@ -93,7 +94,7 @@ class GazeTracker:
     def _loop(self) -> None:
         import cv2
 
-        from .landmarks import FaceLandmarks
+        from .landmarks import FaceLandmarks, brighten_if_dark
 
         cap = self._open_camera()
         if cap is None:
@@ -113,12 +114,13 @@ class GazeTracker:
                 if not ok:
                     self._on_error("The camera stopped delivering frames.")
                     return
-                points = landmarks.detect(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), started)
+                frame, brightened = brighten_if_dark(frame)
+                face = landmarks.detect(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), started)
                 with self._lock:
                     frame_listener = self._frame_listener
                 if frame_listener is not None:
-                    frame_listener(frame, points)
-                self._publish(started, extract_features(points) if points is not None else None)
+                    frame_listener(frame, face.points if face else None, brightened)
+                self._publish(started, extract_features(face.points, face.matrix) if face else None)
                 time.sleep(max(0.0, frame_time - (time.monotonic() - started)))
         finally:
             landmarks.close()

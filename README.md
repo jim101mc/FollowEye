@@ -15,6 +15,10 @@ FollowEye is a Windows desktop assistant that follows where you look and offers 
 
 Without a calibration, or when the webcam is unavailable, FollowEye follows the active window instead of the gaze.
 
+### Calibration
+
+Calibration takes about a minute and consists of three rounds of nine dots: at the normal sitting distance, closer to the screen, and farther away. During each round the background alternates between white, gray and black, so the model learns how the eyes look under different screen lighting. The gaze model combines the iris position with the 3D head pose (turn, tilt and distance) reported by MediaPipe, so moving the head shifts the estimate less. Dark camera images are brightened automatically before face detection.
+
 ### Checking the eye tracking
 
 Two tools in the tray menu help verify that tracking works:

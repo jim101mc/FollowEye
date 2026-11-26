@@ -6,17 +6,26 @@ import numpy as np
 
 from ..config import Calibration
 
-# MediaPipe Face Mesh landmark indices (with refine_landmarks=True, 478 points).
+# MediaPipe Face Landmarker indices (478 points including irises).
 # "A" is the eye on the left of the camera image, "B" the one on the right.
 EYE_A = {"left": 33, "right": 133, "top": 159, "bottom": 145, "iris": 468}
 EYE_B = {"left": 362, "right": 263, "top": 386, "bottom": 374, "iris": 473}
-NOSE_TIP, FACE_LEFT, FACE_RIGHT, FOREHEAD, CHIN = 1, 234, 454, 10, 152
 BLINK_RATIO = 0.12
-N_FEATURES = 6
+# Bump when the features change: older calibrations can't be used and must be redone.
+CALIBRATION_VERSION = 2
 
 
-def extract_features(lm: np.ndarray) -> np.ndarray | None:
-    """Gaze features from a (478, >=2) array of normalized landmarks; None while blinking."""
+def head_pose(matrix: np.ndarray) -> np.ndarray:
+    """[yaw, pitch, roll (radians), x, y, z (cm)] from MediaPipe's 4x4 facial transformation matrix."""
+    r = matrix[:3, :3]
+    yaw = math.atan2(r[0, 2], r[2, 2])
+    pitch = math.asin(max(-1.0, min(1.0, -r[1, 2])))
+    roll = math.atan2(r[1, 0], r[1, 1])
+    return np.array([yaw, pitch, roll, *matrix[:3, 3]], dtype=np.float64)
+
+
+def eye_ratios(lm: np.ndarray) -> tuple[float, float] | None:
+    """Iris position inside the eye openings (0-1, averaged over both eyes); None while blinking."""
     if lm.shape[0] < 478:
         return None
     ratios = []
@@ -28,25 +37,35 @@ def extract_features(lm: np.ndarray) -> np.ndarray | None:
         if width <= 1e-6 or height / width < BLINK_RATIO:
             return None
         ratios.append(((iris[0] - left[0]) / width, (iris[1] - top[1]) / height))
-    hx = (ratios[0][0] + ratios[1][0]) / 2
-    vy = (ratios[0][1] + ratios[1][1]) / 2
-    face_w = lm[FACE_RIGHT, 0] - lm[FACE_LEFT, 0]
-    face_h = lm[CHIN, 1] - lm[FOREHEAD, 1]
-    if face_w <= 1e-6 or face_h <= 1e-6:
+    return (ratios[0][0] + ratios[1][0]) / 2, (ratios[0][1] + ratios[1][1]) / 2
+
+
+def extract_features(lm: np.ndarray, matrix: np.ndarray) -> np.ndarray | None:
+    """[eye_x, eye_y, yaw, pitch, roll, x, y, z] from landmarks and head pose; None while blinking."""
+    eyes = eye_ratios(lm)
+    if eyes is None:
         return None
-    nose = lm[NOSE_TIP, :2]
-    yaw = (nose[0] - (lm[FACE_LEFT, 0] + lm[FACE_RIGHT, 0]) / 2) / face_w
-    pitch = (nose[1] - (lm[FOREHEAD, 1] + lm[CHIN, 1]) / 2) / face_h
-    return np.array([hx, vy, nose[0], nose[1], yaw, pitch], dtype=np.float64)
+    return np.concatenate([eyes, head_pose(matrix)])
 
 
-def _poly2(z: np.ndarray) -> np.ndarray:
-    """Second-order polynomial expansion with bias: [1, z_i, z_i*z_j (i<=j)]."""
+def _design(z: np.ndarray) -> np.ndarray:
+    """Model terms from normalized features: quadratic in the eyes, linear in head pose,
+    plus eye x distance terms (the same eye movement covers more screen when farther away)."""
     z = np.atleast_2d(z)
-    n, d = z.shape
-    cols = [np.ones(n)] + [z[:, i] for i in range(d)]
-    cols += [z[:, i] * z[:, j] for i in range(d) for j in range(i, d)]
+    hx, vy, dist = z[:, 0], z[:, 1], z[:, 7]
+    cols = [np.ones(len(z)), hx, vy, hx * hx, hx * vy, vy * vy, *z[:, 2:8].T, hx * dist, vy * dist]
     return np.stack(cols, axis=1)
+
+
+def robust_mean_filter(samples: np.ndarray, k: float = 2.5) -> np.ndarray:
+    """Drop samples far from the median (eyes still travelling, blinks half-detected)."""
+    if len(samples) < 4:
+        return samples
+    median = np.median(samples, axis=0)
+    mad = np.median(np.abs(samples - median), axis=0)
+    mad[mad < 1e-9] = 1e-9
+    keep = np.all(np.abs(samples - median) <= k * 1.4826 * mad, axis=1)
+    return samples[keep] if keep.sum() >= len(samples) // 2 else samples
 
 
 class GazeModel:
@@ -64,7 +83,7 @@ class GazeModel:
         mean = features.mean(axis=0)
         std = features.std(axis=0)
         std[std < 1e-9] = 1.0
-        x = _poly2((features - mean) / std)
+        x = _design((features - mean) / std)
         reg = ridge * np.eye(x.shape[1])
         reg[0, 0] = 0.0
         coefficients = np.linalg.solve(x.T @ x + reg, x.T @ targets)
@@ -72,7 +91,7 @@ class GazeModel:
         return cls(coefficients, mean, std, screen, error)
 
     def predict(self, features: np.ndarray) -> tuple[float, float]:
-        x = _poly2((features - self.mean) / self.std)
+        x = _design((features - self.mean) / self.std)
         px, py = (x @ self.coefficients)[0]
         return float(px), float(py)
 
@@ -87,6 +106,7 @@ class GazeModel:
             feature_std=self.std.tolist(),
             screen=self.screen,
             mean_error_px=self.mean_error_px,
+            version=CALIBRATION_VERSION,
         )
 
     @classmethod
@@ -131,4 +151,5 @@ class OneEuroFilter:
 def filter_for_smoothing(smoothing: float) -> OneEuroFilter:
     """smoothing in [0, 1]: 0 is nearly raw, 1 is heavily smoothed."""
     smoothing = min(max(smoothing, 0.0), 1.0)
-    return OneEuroFilter(min_cutoff=3.0 - 2.7 * smoothing, beta=0.02 - 0.015 * smoothing)
+    # beta multiplies the speed in pixels per second, so it must be small: larger values let jitter through.
+    return OneEuroFilter(min_cutoff=1.5 - 1.3 * smoothing, beta=0.003 - 0.0025 * smoothing)
